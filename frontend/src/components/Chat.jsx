@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Send, Terminal, ChevronDown, ChevronUp, 
-  AlertTriangle, Check, X, Bot, User, Mic, MicOff, Volume2, VolumeX 
+import ReactMarkdown from 'react-markdown';
+import {
+  Send, Terminal, ChevronDown, ChevronUp,
+  AlertTriangle, Check, X, Bot, User, Mic, MicOff, Volume2, VolumeX
 } from 'lucide-react';
 
 export default function Chat({ 
@@ -107,13 +108,12 @@ export default function Chat({
               </div>
               
               <div className="msg-content-wrapper">
-                {/* Visual Tool Traces Expander */}
                 {msg.traces && msg.traces.length > 0 && (
                   <ToolTraces traces={msg.traces} />
                 )}
-                
+
                 <div className="msg-bubble">
-                  {msg.content}
+                  <ReactMarkdown>{msg.content}</ReactMarkdown>
                 </div>
               </div>
             </div>
@@ -133,7 +133,7 @@ export default function Chat({
               
               {(streamingText || pendingConfirmation) && (
                 <div className="msg-bubble">
-                  {streamingText}
+                  <ReactMarkdown>{streamingText}</ReactMarkdown>
                   {isStreaming && !pendingConfirmation && <span className="typewriter-cursor">▌</span>}
                   
                   {/* Visual Confirmation Panel */}

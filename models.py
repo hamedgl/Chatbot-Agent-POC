@@ -36,7 +36,17 @@ class Event(Base):
 class Setting(Base):
     """Model to store user preferences and settings."""
     __tablename__ = "settings"
-    
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     key: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)  # theme | language | notifications | timezone
     value: Mapped[str] = mapped_column(String(100), nullable=False)
+
+class ChatMessage(Base):
+    """Persisted chat history — user and assistant turns only (no tool/system messages)."""
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)   # user | assistant
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(30), nullable=False)  # ISO-8601

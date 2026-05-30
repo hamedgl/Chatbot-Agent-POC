@@ -1,14 +1,15 @@
-from fastapi import FastAPI, Depends, HTTPException, Body, Request, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 import logging
 import time
 from collections import defaultdict
-import io
 import db
 import tools
-from agent import run_agent_loop
+from models import ChatMessage
+from agent import run_agent_loop, clear_all_sessions
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -43,13 +44,17 @@ async def rate_limiter(request: Request, payload: dict = Body(..., example={"mes
     identifier = session_id if session_id else client_ip
     
     current_time = time.time()
-    # Clean up requests older than 60 seconds
-    request_counts[identifier] = [t for t in request_counts[identifier] if current_time - t < 60]
-    
-    if len(request_counts[identifier]) >= RATE_LIMIT:
+    recent = [t for t in request_counts[identifier] if current_time - t < 60]
+    if recent:
+        request_counts[identifier] = recent
+    else:
+        del request_counts[identifier]  # prune dead keys to prevent unbounded growth
+        recent = []
+
+    if len(recent) >= RATE_LIMIT:
         raise HTTPException(status_code=429, detail="Rate limit exceeded (15 req/min). Please slow down.")
         
-    request_counts[identifier].append(current_time)
+    request_counts[identifier].append(current_time)  # safe: defaultdict recreates the key
     return payload
 
 # --- CHAT ENDPOINT ---
@@ -118,10 +123,67 @@ def get_settings_endpoint(session: Session = Depends(db.get_db)):
 
 @app.post("/api/reset")
 def reset_database_endpoint():
-    """Reset the SQLite database to seed state."""
+    """Reset the SQLite database to seed state and clear all in-memory sessions."""
     try:
         db.reset_db()
+        clear_all_sessions()
         return {"success": True, "message": "Database wiped and re-seeded successfully."}
     except Exception as e:
         logger.error(f"Failed to reset database: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Database reset failed: {str(e)}")
+
+# --- CHAT HISTORY ENDPOINTS ---
+
+@app.get("/api/sessions")
+def get_sessions_endpoint(session: Session = Depends(db.get_db)):
+    """List all chat sessions with their last-active time and first-message preview."""
+    rows = (
+        session.query(
+            ChatMessage.session_id,
+            func.min(ChatMessage.created_at).label("started_at"),
+            func.max(ChatMessage.created_at).label("last_at"),
+            func.count(ChatMessage.id).label("message_count"),
+        )
+        .group_by(ChatMessage.session_id)
+        .order_by(func.max(ChatMessage.created_at).desc())
+        .all()
+    )
+
+    result = []
+    for row in rows:
+        first_user_msg = (
+            session.query(ChatMessage)
+            .filter(ChatMessage.session_id == row.session_id, ChatMessage.role == "user")
+            .order_by(ChatMessage.id)
+            .first()
+        )
+        preview = ""
+        if first_user_msg:
+            preview = first_user_msg.content[:60] + ("…" if len(first_user_msg.content) > 60 else "")
+        result.append({
+            "session_id": row.session_id,
+            "started_at": row.started_at,
+            "last_at": row.last_at,
+            "message_count": row.message_count,
+            "preview": preview or "Empty session",
+        })
+
+    return {"success": True, "data": result}
+
+
+@app.get("/api/history/{session_id}")
+def get_history_endpoint(session_id: str, session: Session = Depends(db.get_db)):
+    """Return the full message history for a given session."""
+    messages = (
+        session.query(ChatMessage)
+        .filter(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.id)
+        .all()
+    )
+    return {
+        "success": True,
+        "data": [
+            {"role": m.role, "content": m.content, "created_at": m.created_at}
+            for m in messages
+        ],
+    }
