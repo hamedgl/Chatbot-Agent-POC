@@ -1,0 +1,53 @@
+version: "3.9"
+
+# Default: backend + frontend against local LM Studio + SQLite
+# With PostgreSQL: docker-compose --profile postgres up
+
+services:
+
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override DATABASE_URL to write SQLite into a mounted volume
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/app.db}
+    volumes:
+      - sqlite_data:/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Local: point at the backend container; VITE vars are baked in at build time
+        VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Optional PostgreSQL — activate with: docker-compose --profile postgres up
+  postgres:
+    image: postgres:15-alpine
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_DB: chatbot
+      POSTGRES_USER: chatbot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localpassword}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatbot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  sqlite_data:
+  postgres_data:

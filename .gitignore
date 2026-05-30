@@ -1,23 +1,67 @@
-# Database
-app.db
-
-# Secrets
-.env
-frontend/.env
-
-# Python Cache
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
 
-# IDEs
+# ── Secrets / environment ─────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+# Keep .env.example (safe template) and Vite mode files committed
+!.env.example
+!frontend/.env.development
+!frontend/.env.production
+
+# ── Database ──────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# ── Terraform ─────────────────────────────────────────────────────────────────
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/terraform.tfstate
+infra/terraform/terraform.tfstate.backup
+infra/terraform/tfplan
+infra/terraform/*.tfvars
+infra/terraform/*.tfvars.json
+*.tfplan
+
+# ── Node / frontend ───────────────────────────────────────────────────────────
+node_modules/
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
+yarn-error.log*
+
+# ── AWS ───────────────────────────────────────────────────────────────────────
+.aws/
+aws-exports.js
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+.dockerignore
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
+*.swp
+*.swo
+*.suo
+.classpath
+.project
 
-# Node
-node_modules/
-npm-debug.log
-yarn-error.log
-
-# Mac
+# ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/

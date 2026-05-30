@@ -18,16 +18,47 @@ logger = logging.getLogger("agent")
 load_dotenv()
 
 # Configurable environment variables
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "lmstudio")       # "lmstudio" | "bedrock"
 LM_STUDIO_BASE_URL = os.getenv("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
 LM_STUDIO_API_KEY = os.getenv("LM_STUDIO_API_KEY", "lm-studio")
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "google/gemma-4-e4b")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.2"))
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 
 MAX_HISTORY_MESSAGES = 40  # system prompt + last 40 messages kept per session
 
-# Initialize LLM Client
 def get_llm_client() -> OpenAI:
     return OpenAI(base_url=LM_STUDIO_BASE_URL, api_key=LM_STUDIO_API_KEY)
+
+def make_llm_stream(messages: List[Dict], tools: List[Dict]):
+    """
+    Returns a streaming iterable in OpenAI chunk format regardless of provider.
+    - lmstudio: uses the OpenAI SDK pointed at LM Studio's local API
+    - bedrock:  uses LiteLLM which converts OpenAI → Bedrock format transparently,
+                and returns OpenAI-compatible chunks (auth via ECS task role or env creds)
+    """
+    if LLM_PROVIDER == "bedrock":
+        import litellm
+        litellm.drop_params = True   # silently drop params unsupported by a given model
+        litellm.modify_params = True # auto-fix consecutive user/tool blocks for Bedrock
+        return litellm.completion(
+            model=f"bedrock/{BEDROCK_MODEL_ID}",
+            messages=messages,
+            tools=tools,
+            temperature=LLM_TEMPERATURE,
+            stream=True,
+            aws_region_name=AWS_REGION,
+        )
+    # Default: LM Studio via OpenAI SDK
+    client = get_llm_client()
+    return client.chat.completions.create(
+        model=LLM_MODEL_NAME,
+        messages=messages,
+        tools=tools,
+        temperature=LLM_TEMPERATURE,
+        stream=True,
+    )
 
 # Define Tool Schemas for Gemma tool-calling
 TOOL_SCHEMAS = [
@@ -214,25 +245,41 @@ REQUIRED_PARAMS: Dict[str, List[str]] = {
 }
 
 
+SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "24"))
+
+
 class SessionState:
     """Manages conversation history and pending destructive action queue."""
     def __init__(self):
         self.messages: List[Dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT}
         ]
-        self.pending_actions: List[Dict[str, Any]] = []  # Queue of unconfirmed destructive calls
+        self.pending_actions: List[Dict[str, Any]] = []
+        self.last_accessed: datetime = datetime.now()
 
 
 # Server-side sessions dictionary
 sessions: Dict[str, SessionState] = {}
 
 
+def _evict_stale_sessions() -> None:
+    """Drop sessions that haven't been used within SESSION_TTL_HOURS to prevent memory leaks."""
+    from datetime import timedelta
+    cutoff = datetime.now() - timedelta(hours=SESSION_TTL_HOURS)
+    stale = [sid for sid, s in sessions.items() if s.last_accessed < cutoff]
+    for sid in stale:
+        del sessions[sid]
+    if stale:
+        logger.info(f"Evicted {len(stale)} stale session(s) older than {SESSION_TTL_HOURS}h")
+
+
 def get_or_create_session(session_id: str, db: Optional[Session] = None) -> SessionState:
     """
     Return existing in-memory session or create a new one.
-    If db is provided and the session is new, pre-loads saved history from the database
-    so conversations survive server restarts.
+    Loads history from DB on first access so conversations survive restarts.
+    Evicts stale sessions on each call to bound memory usage.
     """
+    _evict_stale_sessions()
     if session_id not in sessions:
         new_session = SessionState()
         if db is not None:
@@ -245,6 +292,7 @@ def get_or_create_session(session_id: str, db: Optional[Session] = None) -> Sess
             for row in saved:
                 new_session.messages.append({"role": row.role, "content": row.content})
         sessions[session_id] = new_session
+    sessions[session_id].last_accessed = datetime.now()
     return sessions[session_id]
 
 
@@ -266,6 +314,10 @@ def save_message(db: Session, session_id: str, role: str, content: str) -> None:
         logger.error(f"Failed to persist chat message: {e}")
         db.rollback()
 
+
+def strip_thinking(text: str) -> str:
+    """Remove <thinking>...</thinking> reasoning blocks that some models emit."""
+    return re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL).strip()
 
 def trim_history(messages: List[Dict]) -> List[Dict]:
     """Keep system prompt + last MAX_HISTORY_MESSAGES messages to stay within context limits."""
@@ -434,7 +486,6 @@ def run_agent_loop(
     persists user/assistant messages to the DB, and handles multi-action confirmation queues.
     """
     session = get_or_create_session(session_id, db)
-    client = get_llm_client()
 
     # Inject current date into system prompt each turn
     current_date_info = f"\n\nToday is {datetime.now().strftime('%A, %Y-%m-%d')}."
@@ -525,19 +576,14 @@ def run_agent_loop(
         iteration += 1
 
         try:
-            stream = client.chat.completions.create(
-                model=LLM_MODEL_NAME,
-                messages=trim_history(session.messages),
-                tools=TOOL_SCHEMAS,
-                temperature=LLM_TEMPERATURE,
-                stream=True
-            )
+            stream = make_llm_stream(trim_history(session.messages), TOOL_SCHEMAS)
         except Exception as e:
-            logger.error(f"Error calling LM Studio: {str(e)}")
-            yield json.dumps({
-                "type": "error",
-                "message": "Unable to reach LM Studio. Please make sure the LM Studio server is running locally on port 1234 and the API is turned on."
-            }) + "\n"
+            logger.error(f"Error calling LLM ({LLM_PROVIDER}): {str(e)}")
+            if LLM_PROVIDER == "bedrock":
+                msg = "Unable to reach Amazon Bedrock. Check that your AWS credentials and region are configured correctly and that the model is available."
+            else:
+                msg = "Unable to reach LM Studio. Please make sure the LM Studio server is running locally on port 1234 and the API is turned on."
+            yield json.dumps({"type": "error", "message": msg}) + "\n"
             return
 
         # Accumulate the full streamed response (content + tool call deltas)
@@ -587,6 +633,8 @@ def run_agent_loop(
 
         # 2a. NO TOOL CALLS — this is the final response; emit, persist, and exit
         if not tool_calls:
+            if content:
+                content = strip_thinking(content)  # remove <thinking>…</thinking> before display
             if content:
                 words = content.split(' ')
                 for i, word in enumerate(words):

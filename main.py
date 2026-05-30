@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, Depends, HTTPException, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -11,87 +12,84 @@ import tools
 from models import ChatMessage
 from agent import run_agent_loop, clear_all_sessions
 
-# Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("main")
 
-app = FastAPI(title="Tool-Calling Chatbot API Proof-of-Concept")
+app = FastAPI(title="AI Agent Chatbot API", docs_url="/docs", redoc_url=None)
 
-# Enable CORS for frontend flexibility
+# CORS — restrict to explicit allowlist; never use * in production
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173")
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 @app.on_event("startup")
 def startup_event():
-    """Run database migration and seed data on server start."""
-    logger.info("Initializing database and seeding mock data...")
+    logger.info("Initializing database...")
     with next(db.get_db()) as session:
         db.seed_db(session)
-    logger.info("Database initialized successfully.")
+    logger.info("Database ready.")
 
-# --- RATE LIMITING ---
-request_counts = defaultdict(list)
-RATE_LIMIT = 15  # Max 15 requests per minute per session
+# ── Rate limiting ──────────────────────────────────────────────────────────────
+request_counts: dict = defaultdict(list)
+RATE_LIMIT = 15  # requests per 60 s per session
 
-async def rate_limiter(request: Request, payload: dict = Body(..., example={"message": "hello", "session_id": "session123"})):
+async def rate_limiter(request: Request, payload: dict = Body(...)):
     session_id = payload.get("session_id")
-    client_ip = request.client.host if request.client else "unknown"
-    identifier = session_id if session_id else client_ip
-    
-    current_time = time.time()
-    recent = [t for t in request_counts[identifier] if current_time - t < 60]
+    identifier = session_id or (request.client.host if request.client else "unknown")
+
+    now = time.time()
+    recent = [t for t in request_counts[identifier] if now - t < 60]
     if recent:
         request_counts[identifier] = recent
     else:
-        del request_counts[identifier]  # prune dead keys to prevent unbounded growth
+        del request_counts[identifier]  # prune dead keys
         recent = []
 
     if len(recent) >= RATE_LIMIT:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded (15 req/min). Please slow down.")
-        
-    request_counts[identifier].append(current_time)  # safe: defaultdict recreates the key
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Max 15 requests/minute.")
+
+    request_counts[identifier].append(now)
     return payload
 
-# --- CHAT ENDPOINT ---
+# ── Chat (SSE) ─────────────────────────────────────────────────────────────────
+
+MAX_MESSAGE_LENGTH = 4_000  # characters
 
 @app.post("/api/chat")
-async def chat_endpoint(
-    payload: dict = Depends(rate_limiter)
-):
-    """
-    Orchestrated chat endpoint. Processes the user message, coordinates the agent loop,
-    and returns a Server-Sent Events (SSE) stream.
-    """
-    message = payload.get("message")
+async def chat_endpoint(payload: dict = Depends(rate_limiter)):
+    message = payload.get("message", "")
     session_id = payload.get("session_id")
-    
+
     if not session_id:
         raise HTTPException(status_code=400, detail="Missing required field 'session_id'.")
-        
+    if len(message) > MAX_MESSAGE_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Message exceeds {MAX_MESSAGE_LENGTH} character limit.")
+
     def event_generator():
-        # Get fresh database session for the duration of the generator
         db_session = next(db.get_db())
         try:
             for line in run_agent_loop(db_session, session_id, message):
                 yield line
         except Exception as e:
-            logger.error(f"Error in chat event generator: {str(e)}", exc_info=True)
-            yield f'{{"type": "error", "message": "An internal server error occurred: {str(e)}"}}\n'
+            # Log full detail server-side; send a safe generic message to the client
+            logger.error("Unhandled error in chat generator", exc_info=True)
+            yield '{"type": "error", "message": "An internal server error occurred. Please try again."}\n'
         finally:
             db_session.close()
-            
+
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-# --- REST ENDPOINTS (for the live dashboard) ---
+# ── Dashboard REST endpoints ───────────────────────────────────────────────────
 
 @app.get("/api/profile")
 def get_profile_endpoint(session: Session = Depends(db.get_db)):
-    """Fetch current user profile data."""
     res = tools.get_profile(session)
     if not res["success"]:
         raise HTTPException(status_code=404, detail=res["message"])
@@ -99,7 +97,6 @@ def get_profile_endpoint(session: Session = Depends(db.get_db)):
 
 @app.get("/api/hobbies")
 def get_hobbies_endpoint(session: Session = Depends(db.get_db)):
-    """Fetch current list of hobbies."""
     res = tools.list_hobbies(session)
     if not res["success"]:
         raise HTTPException(status_code=500, detail=res["message"])
@@ -107,7 +104,6 @@ def get_hobbies_endpoint(session: Session = Depends(db.get_db)):
 
 @app.get("/api/events")
 def get_events_endpoint(session: Session = Depends(db.get_db)):
-    """Fetch current scheduled events."""
     res = tools.list_events(session)
     if not res["success"]:
         raise HTTPException(status_code=500, detail=res["message"])
@@ -115,7 +111,6 @@ def get_events_endpoint(session: Session = Depends(db.get_db)):
 
 @app.get("/api/settings")
 def get_settings_endpoint(session: Session = Depends(db.get_db)):
-    """Fetch current user preferences and settings."""
     res = tools.get_settings(session)
     if not res["success"]:
         raise HTTPException(status_code=500, detail=res["message"])
@@ -123,20 +118,18 @@ def get_settings_endpoint(session: Session = Depends(db.get_db)):
 
 @app.post("/api/reset")
 def reset_database_endpoint():
-    """Reset the SQLite database to seed state and clear all in-memory sessions."""
     try:
         db.reset_db()
         clear_all_sessions()
-        return {"success": True, "message": "Database wiped and re-seeded successfully."}
+        return {"success": True, "message": "Database wiped and re-seeded."}
     except Exception as e:
-        logger.error(f"Failed to reset database: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Database reset failed: {str(e)}")
+        logger.error("Database reset failed", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database reset failed.")
 
-# --- CHAT HISTORY ENDPOINTS ---
+# ── Chat history endpoints ─────────────────────────────────────────────────────
 
 @app.get("/api/sessions")
 def get_sessions_endpoint(session: Session = Depends(db.get_db)):
-    """List all chat sessions with their last-active time and first-message preview."""
     rows = (
         session.query(
             ChatMessage.session_id,
@@ -148,18 +141,17 @@ def get_sessions_endpoint(session: Session = Depends(db.get_db)):
         .order_by(func.max(ChatMessage.created_at).desc())
         .all()
     )
-
     result = []
     for row in rows:
-        first_user_msg = (
+        first_msg = (
             session.query(ChatMessage)
             .filter(ChatMessage.session_id == row.session_id, ChatMessage.role == "user")
             .order_by(ChatMessage.id)
             .first()
         )
         preview = ""
-        if first_user_msg:
-            preview = first_user_msg.content[:60] + ("…" if len(first_user_msg.content) > 60 else "")
+        if first_msg:
+            preview = first_msg.content[:60] + ("…" if len(first_msg.content) > 60 else "")
         result.append({
             "session_id": row.session_id,
             "started_at": row.started_at,
@@ -167,13 +159,10 @@ def get_sessions_endpoint(session: Session = Depends(db.get_db)):
             "message_count": row.message_count,
             "preview": preview or "Empty session",
         })
-
     return {"success": True, "data": result}
-
 
 @app.get("/api/history/{session_id}")
 def get_history_endpoint(session_id: str, session: Session = Depends(db.get_db)):
-    """Return the full message history for a given session."""
     messages = (
         session.query(ChatMessage)
         .filter(ChatMessage.session_id == session_id)
@@ -182,8 +171,5 @@ def get_history_endpoint(session_id: str, session: Session = Depends(db.get_db))
     )
     return {
         "success": True,
-        "data": [
-            {"role": m.role, "content": m.content, "created_at": m.created_at}
-            for m in messages
-        ],
+        "data": [{"role": m.role, "content": m.content, "created_at": m.created_at} for m in messages],
     }

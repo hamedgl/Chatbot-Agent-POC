@@ -4,7 +4,9 @@ import Chat from './components/Chat';
 import Dashboard from './components/Dashboard';
 import ChatHistory from './components/ChatHistory';
 
-const FASTAPI_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// ?? not || so that VITE_API_URL="" (empty string for AWS) is respected,
+// while undefined (not set at all, e.g. local dev) falls back to localhost
+const FASTAPI_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
 function generateSessionId() {
   return Math.random().toString(36).substring(2, 15);
@@ -240,10 +242,10 @@ export default function App() {
             <span style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>System Info</span>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                LLM Mode: <code>gemma-4</code>
+                LLM: <code>{FASTAPI_URL ? 'Amazon Bedrock' : 'LM Studio (local)'}</code>
               </div>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                Server: <code>localhost:8000</code>
+                API: <code>{FASTAPI_URL || 'localhost:8000'}</code>
               </div>
             </div>
           </div>
