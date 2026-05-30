@@ -1,9 +1,23 @@
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from models import Profile, Hobby, Event, Setting
 
 # Input validation helpers
+def resolve_date_string(date_str: str) -> str:
+    """
+    Resolve relative date strings like 'today' or 'tomorrow' to absolute YYYY-MM-DD.
+    If it is already YYYY-MM-DD or doesn't match, returns the original input.
+    """
+    clean_date = date_str.lower().strip()
+    if clean_date == "today":
+        return datetime.now().strftime("%Y-%m-%d")
+    elif clean_date == "tomorrow":
+        return (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    elif clean_date == "yesterday":
+        return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    return date_str
+
 def validate_date(date_str: str) -> bool:
     """Validate that date matches YYYY-MM-DD format."""
     try:
@@ -72,6 +86,8 @@ def update_profile(db: Session, field: str, value: str) -> dict:
     
     # Input validation for specific fields (unless doing a wipe)
     value_stripped = value.strip()
+    if field == "dob":
+        value_stripped = resolve_date_string(value_stripped)
     if value_stripped not in ["", "None", "null"]:
         if field == "dob" and not validate_date(value_stripped):
             return {"success": False, "message": "Invalid date format. Please use YYYY-MM-DD."}
@@ -227,7 +243,7 @@ def create_event(db: Session, title: str, date: str, location: str) -> dict:
         A dictionary containing success status and details of the created event.
     """
     title = title.strip()
-    date = date.strip()
+    date = resolve_date_string(date.strip())
     location = location.strip()
     
     if not title:

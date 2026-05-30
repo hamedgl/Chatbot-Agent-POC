@@ -1,25 +1,25 @@
-# Python Tool-Calling Chatbot Proof-of-Concept
+# Chatbot Agent & React Dashboard Proof-of-Concept
 
-A complete, clean, and highly visual proof-of-concept demonstrating a natural-language chatbot that can view and modify real database data through LLM tool-calling capabilities. Powered by a local **Gemma 3 4B** model running via LM Studio.
+A high-fidelity, clean, and interactive proof-of-concept demonstrating a natural-language chatbot that can view and modify real SQLite database data through LLM tool-calling. Powered by a local **Gemma 4** model and an ultra-premium **Vite + React** single page application.
 
 ---
 
 ## 🌟 Highlights & Features
-1. **Robust Confirmation Flow**: Intercepts destructive actions (*removing a hobby, cancelling an event, or wiping/clearing profile fields*) at the server/orchestration layer, requiring user confirmation before execution.
-2. **Multi-Step/Chained Tool Calls**: Supports complex sentences requiring the agent to call multiple tools sequentially before responding (e.g. adding a hobby and changing a setting at the same time).
-3. **Real-Time Live Dashboard**: A two-column interface showing the interactive chat on the left and a live-updating view of the SQLite database data (profile, hobbies, events, and settings) on the right.
-4. **Defensive JSON Parsing**: Handles smaller models (like Gemma 3 4B) that sometimes emit JSON tool calls directly in their text response block instead of the structured API field.
-5. **Streaming Responses**: Streams the final natural-language assistant response chunk-by-chunk for a professional, conversational user experience.
-6. **Persistent Session Memory**: Server-side conversation and tool-calling context managed per unique session ID.
+1. **Clickable Confirmation Buttons**: Destructive actions (*removing a hobby, cancelling an event, or clearing profile fields*) are intercepted at the server layer, pausing execution. The React chat interface instantly renders styled **Confirm Action** and **Cancel Action** buttons so you don't have to type "Yes" or "No".
+2. **Multi-Step/Chained Tool Calls**: The agent evaluates user intent and can chain multiple sequential database tool runs (e.g. adding a hobby and updating a preference card at the same time) before returning a final summary.
+3. **Real-Time Live Dashboard**: A custom two-column panel showing the conversational assistant on the left and a live database visual representation (Profile, Hobbies badges, Scheduled Events, Settings grid) on the right that **automatically updates in real time** as you chat.
+4. **Visual Tool Traces**: Streams collapsible terminal log outputs under the active assistant bubble, allowing users to watch the specific arguments and execution results of each tool in real time.
+5. **Defensive JSON Parser**: Standardizes and extracts JSON tool call blocks when smaller models (like Gemma 4) output schemas directly inside markdown text blocks rather than the tool-calling parameters field.
+6. **Streaming SSE Responses**: Streams final assistant answers token-by-token for a professional, responsive user experience.
 
 ---
 
 ## 🏗️ Architecture
-- **`models.py` + `db.py`**: SQLAlchemy ORM definitions and SQLite seeding/reset logic.
-- **`tools.py`**: The actual business functions (get/update profile, list/add/remove hobbies, list/create/cancel events, get/update settings) containing strict input validations.
-- **`agent.py`**: Orchestration loop, dynamic schema definitions, defensive parser, and confirmation state machine.
-- **`main.py`**: FastAPI application exposing SSE `/api/chat` streaming and REST endpoints for the live dashboard.
-- **`app_ui.py`**: Premium Streamlit UI with collapsible tool traces and real-time dashboard representation.
+- **`models.py` + `db.py`**: SQLAlchemy 2.0 database mapping models and seeding/reset logic.
+- **`tools.py`**: Business tools (profile, hobbies, events, settings) with robust input validation.
+- **`agent.py`**: Orchestration engine, schemas, defensive parser, and confirmation state.
+- **`main.py`**: FastAPI server exposing SSE chat stream and REST state polling endpoints.
+- **`frontend/`**: Beautiful **Vite + React** SPA equipped with Lucide vector icons, real-time data polling, and native streaming SSE parser.
 
 ---
 
@@ -27,89 +27,77 @@ A complete, clean, and highly visual proof-of-concept demonstrating a natural-la
 
 ### 1. Prerequisites
 - **Python 3.11+** installed.
+- **Node.js (v18+)** installed.
 - **LM Studio** installed on your system.
 
 ### 2. Configure LM Studio
-1. Open LM Studio and search/download the model **Gemma 3 4B Instruct** (or search for `gemma-3-4b-instruct`).
+1. Open LM Studio and download the model **Gemma 4 Instruct** (or search for `gemma-4`).
 2. Load the model.
-3. Navigate to the **Local Server** section on the left sidebar.
-4. Set the port to `1234` and click **Start Server**.
+3. Navigate to the **Local Server** tab on the left.
+4. Set the port to `1235` (or matches your `.env` configuration), and click **Start Server**.
 5. Keep LM Studio running in the background.
 
-### 3. Environment & Dependencies Setup
-Clone or locate the project directory in your terminal and run:
-
-```bash
-# Create a virtual environment
-python -m venv venv
-
-# Activate virtual environment
-# On Windows (PowerShell):
-.\venv\Scripts\Activate.ps1
-# On macOS/Linux:
-source venv/bin/activate
-
-# Install required packages
-pip install -r requirements.txt
-```
-
-Verify your environment configuration in the `.env` file (copied from `.env.example` automatically on first setup):
+### 3. Environment Setup
+Configure your database and local LLM credentials in the `.env` file in the root directory:
 ```ini
-LM_STUDIO_BASE_URL=http://localhost:1234/v1
-LM_STUDIO_API_KEY=lm-studio
-LLM_MODEL_NAME=gemma-3-4b
+LM_STUDIO_BASE_URL=http://localhost:1235/v1
+LM_STUDIO_API_KEY=sk-lm-w7hFBqYD:3ipj257ad3OpdcHsF2oh
+LLM_MODEL_NAME=gemma-4
 LLM_TEMPERATURE=0.2
 DATABASE_URL=sqlite:///app.db
 FASTAPI_URL=http://localhost:8000
 ```
 
 ### 4. Running the Servers
-You need to open two terminal tabs (with virtual environments activated in both):
+You need to open two terminal windows (virtual environments active in both if applicable):
 
-#### Tab 1: Start the FastAPI Backend
+#### Tab 1: Start the FastAPI Backend (Root Directory)
 ```bash
+# Install backend requirements
+pip install -r requirements.txt
+
+# Start backend server
 uvicorn main:app --reload --port 8000
 ```
-*The server will auto-seed the `app.db` file on startup.*
+*The database seeds automatically on startup.*
 
-#### Tab 2: Start the Streamlit Frontend
+#### Tab 2: Start the React Frontend (Frontend Directory)
 ```bash
-streamlit run app_ui.py
+# Navigate to frontend folder
+cd frontend
+
+# Install Node modules (if not already done)
+npm install
+
+# Start Vite React server
+npm run dev
 ```
-*Streamlit will automatically launch in your browser at `http://localhost:8501`.*
+*Vite will start the client interface at `http://localhost:5173`.*
 
 ---
 
-## 💬 Try These Phrases (Test Guide)
+## 💬 Try These Phrases (Stakeholder Test Guide)
 
-Here are the step-by-step example queries to showcase the main capabilities to stakeholders:
+Here are the step-by-step example queries to showcase the main capabilities:
 
-### 1. Viewing & Querying State
+### 1. Viewing State
 * **Phrase**: `Show me my current profile details and list my hobbies.`
-* **Expectation**: The chatbot calls `get_profile` and `list_hobbies`, displaying the collapsible tool traces in the chat, and replies with your info.
+* **Expectation**: The chatbot calls `get_profile` and `list_hobbies`, displaying the collapsible tool traces in the chat, and lists your details.
 
-### 2. Multi-Step/Chained Action
+### 2. Multi-Step Chained Action
 * **Phrase**: `Add Gardening as a beginner hobby and change my theme setting to dark.`
 * **Expectation**: In one turn, the agent chains two tool calls (`add_hobby` and `update_setting`). Look at the dashboard on the right: a new hobby card appears and the theme changes to dark!
 
-### 3. Destructive Action - Confirmation Flow (Hobby Removal)
+### 3. Destructive Action - Clickable Confirmation Buttons (Hobby Removal)
 * **Phrase**: `Remove swimming from my hobbies.`
-* **Expectation**: The agent pauses and prints a confirmation prompt: *"⚠️ Confirmation Required: You requested to remove your hobby of swimming. Do you want to proceed? (Yes/No)"*.
-* **Next Input (Yes)**: Type `Yes`. The tool executes, swimming disappears from the dashboard, and the chatbot confirms the action.
-* **Next Input (No)**: Alternatively, type `No`. The tool is discarded and no change occurs.
+* **Expectation**: The system intercepts the request. The chat UI renders a panel with custom **Confirm Action** and **Cancel Action** buttons.
+* **Confirm Click**: Click `Confirm Action`. Swimming is deleted, the dashboard updates immediately, and the assistant summarizes the deletion.
+* **Cancel Click**: Alternatively, click `Cancel Action`. The tool is discarded and the hobby is kept in the database.
 
-### 4. Destructive Action - Confirmation Flow (Event Cancellation)
+### 4. Destructive Action - Clickable Confirmation (Event Cancellation)
 * **Phrase**: `Cancel the scheduled event with ID 2.`
-* **Expectation**: The system intercepts the delete request, requests approval, and only deletes the event from the database/dashboard once you confirm with an affirmative response.
+* **Expectation**: The system blocks direct deletion and presents the custom confirmation panel. Click to proceed or abort.
 
-### 5. Destructive Action - Confirmation Flow (Profile Wipe)
-* **Phrase**: `Clear out my bio field.`
-* **Expectation**: Because setting a field value to empty counts as a wipe, the system flags it as destructive and requests confirmation before emptying the text.
-
-### 6. Dynamic Event Scheduling
-* **Phrase**: `Schedule a Coding Meetup on 2026-06-15 at the Downtown Library.`
-* **Expectation**: The agent schedules the event using `create_event`, and you see it populate on the live dashboard.
-
-### 7. Input Validation & Error Handling
-* **Phrase**: `Set my theme to green` or `Change my DOB to tomorrow.`
-* **Expectation**: The tool functions validate inputs. The agent will execute the tool, receive a fail result (`{"success": False, "message": "Theme must be 'light' or 'dark'."}`), and explain to the user why the change could not be performed.
+### 5. Input Validation
+* **Phrase**: `Set my theme preference to green.`
+* **Expectation**: The tool functions validate inputs. The agent will execute `update_setting`, receive a fail result (`{"success": False, "message": "Theme must be 'light' or 'dark'."}`), and explain to the user why the change could not be performed.

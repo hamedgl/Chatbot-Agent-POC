@@ -19,7 +19,7 @@ load_dotenv()
 # Configurable environment variables
 LM_STUDIO_BASE_URL = os.getenv("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
 LM_STUDIO_API_KEY = os.getenv("LM_STUDIO_API_KEY", "lm-studio")
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemma-3-4b")
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "google/gemma-4-e4b")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.2"))
 
 # Initialize LLM Client
@@ -199,6 +199,7 @@ CRITICAL RULES:
 3. Be friendly and conversational.
 4. If a user request is ambiguous, ask clarifying questions before calling a tool.
 5. If a tool call fails or returns an error, explain the error to the user in a helpful way.
+6. Proactively interpret user sentiment and implicit statements as request updates. For example, if the user says "I hate reading" or "I don't do swimming anymore", proactively call the `remove_hobby` tool for that hobby name.
 """
 
 class SessionState:
@@ -216,6 +217,28 @@ def get_or_create_session(session_id: str) -> SessionState:
     if session_id not in sessions:
         sessions[session_id] = SessionState()
     return sessions[session_id]
+
+def normalize_tool_name(name: str) -> str:
+    """Normalize and map prefixed namespaces or hallucinated tool names to correct tool names."""
+    # Lowercase and clean
+    clean_name = name.lower().strip()
+    
+    # Remove any prefixed namespace (e.g., "events.create_event" -> "create_event")
+    clean_name = re.sub(r'^(events|hobbies|profile|settings|user|profile_tools|event_tools|hobby_tools|setting_tools)\.', '', clean_name)
+    
+    alias_map = {
+        "create_scheduled_event": "create_event",
+        "cancel_scheduled_event": "cancel_event",
+        "delete_hobby": "remove_hobby",
+        "delete_event": "cancel_event",
+        "get_user_profile": "get_profile",
+        "update_user_profile": "update_profile",
+        "edit_profile": "update_profile"
+    }
+    
+    mapped_name = alias_map.get(clean_name, clean_name)
+    logger.info(f"Tool Name Normalizer: mapped '{name}' -> '{mapped_name}'")
+    return mapped_name
 
 def is_destructive_action(name: str, arguments: dict) -> Tuple[bool, str]:
     """
@@ -326,6 +349,11 @@ def run_agent_loop(
     """
     session = get_or_create_session(session_id)
     client = get_llm_client()
+    
+    # Dynamically inject the current system time to enable robust relative date reasoning
+    current_date_info = f"\n\nToday is {datetime.now().strftime('%A, %Y-%m-%d')}."
+    if session.messages and session.messages[0]["role"] == "system":
+        session.messages[0]["content"] = SYSTEM_PROMPT + current_date_info
     
     # 1. HANDLE CONFIRMATION FLOWS (if there is a pending action)
     if session.pending_action and user_input:
@@ -490,6 +518,8 @@ def run_agent_loop(
                 tc_id = tool_call.id
                 name = tool_call.function.name
                 args_str = tool_call.function.arguments
+                
+            name = normalize_tool_name(name)
                 
             try:
                 arguments = json.loads(args_str) if args_str else {}
