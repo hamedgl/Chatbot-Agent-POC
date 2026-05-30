@@ -1,8 +1,12 @@
-from fastapi import FastAPI, Depends, HTTPException, Body
+from fastapi import FastAPI, Depends, HTTPException, Body, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import logging
+import time
+from collections import defaultdict
+import io
+import speech_recognition as sr
 
 import db
 import tools
@@ -31,11 +35,30 @@ def startup_event():
         db.seed_db(session)
     logger.info("Database initialized successfully.")
 
+# --- RATE LIMITING ---
+request_counts = defaultdict(list)
+RATE_LIMIT = 15  # Max 15 requests per minute per session
+
+async def rate_limiter(request: Request, payload: dict = Body(..., example={"message": "hello", "session_id": "session123"})):
+    session_id = payload.get("session_id")
+    client_ip = request.client.host if request.client else "unknown"
+    identifier = session_id if session_id else client_ip
+    
+    current_time = time.time()
+    # Clean up requests older than 60 seconds
+    request_counts[identifier] = [t for t in request_counts[identifier] if current_time - t < 60]
+    
+    if len(request_counts[identifier]) >= RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded (15 req/min). Please slow down.")
+        
+    request_counts[identifier].append(current_time)
+    return payload
+
 # --- CHAT ENDPOINT ---
 
 @app.post("/api/chat")
 async def chat_endpoint(
-    payload: dict = Body(..., example={"message": "hello", "session_id": "session123"})
+    payload: dict = Depends(rate_limiter)
 ):
     """
     Orchestrated chat endpoint. Processes the user message, coordinates the agent loop,
@@ -60,6 +83,28 @@ async def chat_endpoint(
             db_session.close()
             
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+# --- AUDIO ENDPOINT ---
+
+@app.post("/api/transcribe")
+async def transcribe_audio_endpoint(audio: UploadFile = File(...)):
+    """Transcribes an uploaded WAV file using Google's free API via SpeechRecognition."""
+    try:
+        content = await audio.read()
+        recognizer = sr.Recognizer()
+        
+        with sr.AudioFile(io.BytesIO(content)) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data)
+            return {"success": True, "text": text}
+    except sr.UnknownValueError:
+        return {"success": False, "message": "Could not understand audio."}
+    except sr.RequestError as e:
+        logger.error(f"Could not request results from Speech Recognition service; {e}")
+        return {"success": False, "message": "Transcription service unavailable."}
+    except Exception as e:
+        logger.error(f"Transcription error: {str(e)}", exc_info=True)
+        return {"success": False, "message": f"Error: {str(e)}"}
 
 # --- REST ENDPOINTS (for the live dashboard) ---
 

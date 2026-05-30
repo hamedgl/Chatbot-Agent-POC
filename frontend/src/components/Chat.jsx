@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Send, Terminal, ChevronDown, ChevronUp, 
-  AlertTriangle, Check, X, Bot, User 
+  AlertTriangle, Check, X, Bot, User, Mic, MicOff, Volume2, VolumeX 
 } from 'lucide-react';
 
 export default function Chat({ 
@@ -14,6 +14,39 @@ export default function Chat({
 }) {
   const [input, setInput] = useState('');
   const chatEndRef = useRef(null);
+  
+  // Voice state (Text-to-Speech)
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const prevStreamingRef = useRef(isStreaming);
+
+  // Handle text-to-voice when streaming finishes
+  useEffect(() => {
+    if (prevStreamingRef.current && !isStreaming && voiceEnabled && messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.role === 'assistant' && lastMsg.content) {
+        speakText(lastMsg.content);
+      }
+    }
+    prevStreamingRef.current = isStreaming;
+  }, [isStreaming, voiceEnabled, messages]);
+
+  const speakText = (text) => {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    // Clean markdown characters so it reads naturally
+    const cleanText = text.replace(/[*#_`~]/g, '');
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.lang = 'en-US';
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const toggleVoice = () => {
+    const nextState = !voiceEnabled;
+    setVoiceEnabled(nextState);
+    if (!nextState && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  };
 
   // Auto-scroll to bottom
   const scrollToBottom = () => {
@@ -36,13 +69,26 @@ export default function Chat({
       {/* Chat Header */}
       <div className="chat-header">
         <Bot size={22} className="brand-icon" />
-        <div>
+        <div style={{ flex: 1 }}>
           <h2 style={{ fontSize: '16px', fontWeight: '700' }}>AI Assistant</h2>
           <span style={{ fontSize: '11px', color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '4px' }}>
             <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: 'var(--success)', display: 'inline-block' }}></span>
             Gemma 4 Connected
           </span>
         </div>
+        
+        {/* Voice Output Toggle */}
+        <button 
+          onClick={toggleVoice} 
+          className="voice-toggle-btn"
+          title={voiceEnabled ? "Mute agent voice" : "Enable agent voice"}
+          style={{ 
+            background: 'none', border: 'none', color: voiceEnabled ? 'var(--primary)' : 'var(--text-muted)', 
+            cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '8px' 
+          }}
+        >
+          {voiceEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
+        </button>
       </div>
 
       {/* Messages History */}
