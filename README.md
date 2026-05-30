@@ -1,103 +1,221 @@
-# Chatbot Agent & React Dashboard Proof-of-Concept
+# AI Agent Chatbot — Proof of Concept
 
-A high-fidelity, clean, and interactive proof-of-concept demonstrating a natural-language chatbot that can view and modify real SQLite database data through LLM tool-calling. Powered by a local **Gemma 4** model and an ultra-premium **Vite + React** single page application.
-
----
-
-## 🌟 Highlights & Features
-1. **Clickable Confirmation Buttons**: ALL modifying actions (*adding/removing hobbies, creating/cancelling events, or updating settings/profile fields*) are intercepted at the server layer, pausing execution. The React chat interface instantly renders styled **Confirm Action** and **Cancel Action** buttons so you don't have to type "Yes" or "No".
-2. **Multi-Step/Chained Tool Calls**: The agent evaluates user intent and can chain multiple sequential database tool runs (e.g. adding a hobby and updating a preference card at the same time) before returning a final summary.
-3. **Real-Time Live Dashboard**: A custom two-column panel showing the conversational assistant on the left and a live database visual representation (Profile, Hobbies badges, Scheduled Events, Settings grid) on the right that **automatically updates in real time** as you chat.
-4. **Visual Tool Traces**: Streams collapsible terminal log outputs under the active assistant bubble, allowing users to watch the specific arguments and execution results of each tool in real time.
-5. **Defensive JSON Parser**: Standardizes and extracts JSON tool call blocks when smaller models (like Gemma 4) output schemas directly inside markdown text blocks rather than the tool-calling parameters field.
-6. **Streaming SSE Responses**: Streams final assistant answers token-by-token for a professional, responsive user experience.
+A full-stack, tool-calling AI chatbot that lets you manage a personal database through plain English. Powered by a local **Gemma 4** model running in LM Studio, a **FastAPI** backend with real-time SSE streaming, a **SQLite** database, and a dark-themed **React + Vite** SPA.
 
 ---
 
-## 🏗️ Architecture
-- **`models.py` + `db.py`**: SQLAlchemy 2.0 database mapping models and seeding/reset logic.
-- **`tools.py`**: Business tools (profile, hobbies, events, settings) with robust input validation.
-- **`agent.py`**: Orchestration engine, schemas, defensive parser, and confirmation state.
-- **`main.py`**: FastAPI server exposing SSE chat stream and REST state polling endpoints.
-- **`frontend/`**: Beautiful **Vite + React** SPA equipped with Lucide vector icons, real-time data polling, and native streaming SSE parser.
+## Features
+
+| Feature | Detail |
+|---|---|
+| **Natural-language CRUD** | Read and write profile, hobbies, calendar events, and settings via conversation |
+| **Streaming responses** | Word-by-word typewriter effect delivered over Server-Sent Events |
+| **Confirmation gate** | Every write action is intercepted before execution — Confirm / Cancel buttons appear inline |
+| **Multi-action batching** | When the LLM requests several writes in one turn, all are shown together in a single "confirm all?" prompt |
+| **Persistent chat history** | Conversations are saved to SQLite and restored on page refresh or server restart |
+| **Session browser** | Sidebar lists all past sessions with relative timestamps and first-message previews |
+| **Session switching** | Click any past session to load it; "+ New" button starts a fresh conversation |
+| **Live dashboard** | Right panel shows the current DB state (profile, hobbies, events, settings) and updates automatically after each chat turn |
+| **Markdown rendering** | Agent responses render bold text, bullet lists, and inline code correctly |
+| **Tool execution traces** | Collapsible terminal log under each message shows every tool call and its result |
+| **Fallback tool-call parser** | Captures tool calls that Gemma leaks as raw text tokens instead of the structured `tool_calls` field |
+| **Relative date resolution** | "tomorrow", "next Friday" etc. are resolved to `YYYY-MM-DD` before writing |
+| **Text-to-speech** | Optional voice-output toggle in the chat header |
+| **Rate limiting** | 15 requests / minute per session |
+| **Demo reset** | One button wipes the DB and all chat history, then re-seeds with sample data |
 
 ---
 
-## 🛠️ Step-by-Step Setup
+## Architecture
 
-### 1. Prerequisites
-- **Python 3.11+** installed.
-- **Node.js (v18+)** installed.
-- **LM Studio** installed on your system.
+```
+Browser  (React + Vite · localhost:5173)
+  │
+  ├─ POST /api/chat  ──────────────────────────────────────────────────────►
+  │  ◄── SSE stream  (trace | content | confirmation | error | done) ──────
+  │
+  ├─ GET  /api/profile | /api/hobbies | /api/events | /api/settings
+  ├─ GET  /api/sessions                  ← sidebar history list
+  ├─ GET  /api/history/{session_id}      ← restore a conversation
+  └─ POST /api/reset
 
-### 2. Configure LM Studio
-1. Open LM Studio and download the model **Gemma 4 Instruct** (or search for `gemma-4`).
-2. Load the model.
-3. Navigate to the **Local Server** tab on the left.
-4. Set the port to `1235` (or matches your `.env` configuration), and click **Start Server**.
-5. Keep LM Studio running in the background.
+FastAPI server  (main.py · localhost:8000)
+  └─ run_agent_loop  (agent.py)
+        ├─ SessionState — per-session conversation context (in-memory)
+        │       Loaded from DB on first access → survives server restarts
+        ├─ Single streaming LLM call per iteration
+        │       LM Studio  ←→  Gemma 4  (OpenAI-compatible API · :1234)
+        ├─ Tool execution  (tools.py)
+        │       get_profile    update_profile
+        │       list_hobbies   add_hobby     remove_hobby
+        │       list_events    create_event  cancel_event
+        │       get_settings   update_setting
+        └─ SQLAlchemy + SQLite  (models.py / db.py)
+                profiles | hobbies | events | settings | chat_messages
+```
 
-### 3. Environment Setup
-Configure your database and local LLM credentials in the `.env` file in the root directory:
+### Key design decisions
+
+| Decision | Reason |
+|---|---|
+| Single streaming LLM call | Eliminates the double-call pattern (one probe call + one streaming call) — halves latency and LM Studio load |
+| Pre-classify writes before touching history | Validation and destructive-action checks happen before any messages are appended, preventing orphaned tool-call entries on failure |
+| `pending_actions` queue | Supports batching multiple write operations into one confirmation prompt |
+| DB-persisted chat history | `chat_messages` stores user/assistant turns; `get_or_create_session` loads them on first access |
+| History trimming | System prompt + last 40 messages are sent per LLM call to stay within the model's context window |
+| Rate-limiter key pruning | Dead session keys are deleted once their timestamp list empties, preventing unbounded memory growth |
+
+---
+
+## Prerequisites
+
+| Tool | Notes |
+|---|---|
+| Python 3.11+ | |
+| Node.js 18+ | |
+| [LM Studio](https://lmstudio.ai) | Free desktop app — runs the local LLM server |
+| Gemma 4 model | Download inside LM Studio |
+
+---
+
+## Setup
+
+### 1. Clone and configure
+
+```bash
+git clone <repo-url>
+cd "ai agent chat"
+cp .env.example .env
+```
+
+`.env` defaults (work out of the box with LM Studio on port 1234):
+
 ```ini
-LM_STUDIO_BASE_URL=http://localhost:1235/v1
-LM_STUDIO_API_KEY=sk-lm-w7hFBqYD:3ipj257ad3OpdcHsF2oh
-LLM_MODEL_NAME=gemma-4
+LM_STUDIO_BASE_URL=http://localhost:1234/v1
+LM_STUDIO_API_KEY=lm-studio
+LLM_MODEL_NAME=google/gemma-4-e4b
 LLM_TEMPERATURE=0.2
 DATABASE_URL=sqlite:///app.db
-FASTAPI_URL=http://localhost:8000
 ```
 
-### 4. Running the Servers
-You need to open two terminal windows (virtual environments active in both if applicable):
+### 2. LM Studio
 
-#### Tab 1: Start the FastAPI Backend (Root Directory)
+1. Open LM Studio and download **Gemma 4** (search `gemma-4`).
+2. Load the model.
+3. Go to **Local Server** → set port to **1234** → **Start Server**.
+
+### 3. Backend
+
 ```bash
-# Install backend requirements
 pip install -r requirements.txt
-
-# Start backend server
 uvicorn main:app --reload --port 8000
 ```
-*The database seeds automatically on startup.*
 
-#### Tab 2: Start the React Frontend (Frontend Directory)
+The server creates all database tables and seeds mock data on first run.
+
+### 4. Frontend
+
 ```bash
-# Navigate to frontend folder
 cd frontend
-
-# Install Node modules (if not already done)
 npm install
-
-# Start Vite React server
 npm run dev
 ```
-*Vite will start the client interface at `http://localhost:5173`.*
+
+Open [http://localhost:5173](http://localhost:5173).
 
 ---
 
-## 💬 Try These Phrases (Stakeholder Test Guide)
+## Project structure
 
-Here are the step-by-step example queries to showcase the main capabilities:
+```
+ai agent chat/
+├── main.py           FastAPI app — rate limiting, SSE chat, REST, history endpoints
+├── agent.py          LLM orchestration loop, session state, DB persistence, tool dispatch
+├── tools.py          CRUD tool implementations with input validation
+├── models.py         SQLAlchemy models (Profile, Hobby, Event, Setting, ChatMessage)
+├── db.py             Engine, session factory, seed/reset helpers
+├── requirements.txt
+├── .env.example
+└── frontend/
+    └── src/
+        ├── App.jsx                 Root — session management, SSE handling, layout
+        ├── components/
+        │   ├── Chat.jsx            Chat panel, streaming, markdown, confirmation UI
+        │   ├── ChatHistory.jsx     Sidebar session browser with session switching
+        │   └── Dashboard.jsx       Live profile/hobbies/events/settings panel
+        └── index.css               All styles — dark theme, markdown, history panel
+```
 
-### 1. Viewing State
-* **Phrase**: `Show me my current profile details and list my hobbies.`
-* **Expectation**: The chatbot calls `get_profile` and `list_hobbies`, displaying the collapsible tool traces in the chat, and lists your details.
+---
 
-### 2. Multi-Step Chained Action (Requires Confirmation)
-* **Phrase**: `Add Gardening as a beginner hobby and change my theme setting to dark.`
-* **Expectation**: In one turn, the agent chains two tool calls (`add_hobby` and `update_setting`). The system intercepts both actions and prompts you to confirm. Once confirmed, the dashboard updates immediately!
+## API reference
 
-### 3. Modifying Action - Clickable Confirmation Buttons (Hobby Removal)
-* **Phrase**: `Remove swimming from my hobbies.`
-* **Expectation**: The system intercepts the request. The chat UI renders a panel with custom **Confirm Action** and **Cancel Action** buttons.
-* **Confirm Click**: Click `Confirm Action`. Swimming is deleted, the dashboard updates immediately, and the assistant summarizes the deletion.
-* **Cancel Click**: Alternatively, click `Cancel Action`. The tool is discarded and the hobby is kept in the database.
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/chat` | Send a message; returns SSE stream |
+| `GET` | `/api/profile` | Current profile |
+| `GET` | `/api/hobbies` | Hobby list |
+| `GET` | `/api/events` | Scheduled events |
+| `GET` | `/api/settings` | Settings key-value map |
+| `GET` | `/api/sessions` | All sessions — preview, timestamps, message count |
+| `GET` | `/api/history/{session_id}` | Full ordered message history for a session |
+| `POST` | `/api/reset` | Wipe DB + chat history, re-seed, clear in-memory sessions |
 
-### 4. Modifying Action - Clickable Confirmation (Event Cancellation)
-* **Phrase**: `Cancel the scheduled event with ID 2.`
-* **Expectation**: The system blocks direct deletion and presents the custom confirmation panel. Click to proceed or abort.
+### SSE event schema
 
-### 5. Input Validation
-* **Phrase**: `Set my theme preference to green.`
-* **Expectation**: The tool functions validate inputs. The agent will execute `update_setting`, receive a fail result (`{"success": False, "message": "Theme must be 'light' or 'dark'."}`), and explain to the user why the change could not be performed.
+```jsonc
+{ "type": "trace",        "message": "🔧 LLM requested tool: add_hobby({...})" }
+{ "type": "content",      "delta": "word " }            // streamed word by word
+{ "type": "confirmation", "message": "...", "pending": true }
+{ "type": "error",        "message": "..." }
+{ "type": "done" }
+```
+
+---
+
+## Agent loop — step by step
+
+1. **Session restore** — `get_or_create_session(session_id, db)` checks the in-memory dict first; if missing (new session or server restart), it loads all saved `chat_messages` rows for that session ID into a fresh `SessionState`.
+2. **Confirmation check** — if a `pending_actions` queue exists, the user's reply is classified as affirmative / negative / ambiguous before the LLM is called.
+3. **Single streaming call** — `stream=True` is passed; content chunks and tool-call deltas are accumulated together. No second call is made.
+4. **Fallback parser** — if `delta.tool_calls` arrives empty but content contains Gemma's raw tool tokens or a JSON code block, the fallback regex parser normalises them.
+5. **Validation** — required parameters are checked for every tool call *before* anything is written to session history.
+6. **Pre-classification** — tool calls are split into safe reads and destructive writes.
+7. **Reads execute immediately** — results are appended to history; loop continues.
+8. **Writes are queued** — all destructive calls go into `pending_actions`; a combined confirmation message is yielded to the client.
+9. **On confirm** — all queued actions execute in order; results are appended; the loop continues so the LLM summarises what happened.
+10. **DB persistence** — every user turn and final assistant response is written to `chat_messages` via `save_message()`.
+11. **History trim** — `trim_history()` sends only `system prompt + last 40 messages` to the LLM per call.
+
+---
+
+## Example walkthrough
+
+```
+You:   Add yoga at beginner level and cancel event 2.
+
+Agent: Almost done! I need your permission to perform 2 actions:
+       • add the hobby yoga (beginner)
+       • cancel the scheduled event with ID 2
+       Do all of these look good to you?
+
+       [Confirm Action]  [Cancel Action]
+
+You:   (click Confirm)
+
+Agent: ✅ Done! I've added Yoga as a beginner hobby and cancelled
+       the Weekly Team Sync event. Your dashboard has been updated.
+```
+
+---
+
+## Seed data
+
+The database is pre-populated on the first run (and after every reset):
+
+| Entity | Values |
+|---|---|
+| Profile | Alice Smith · 1995-06-15 · alice@example.com · +1-555-0199 |
+| Hobbies | Swimming (intermediate) · Reading (advanced) · Cooking (beginner) |
+| Events | Tech Conference 2026-06-10 (San Francisco) · Weekly Team Sync 2026-06-03 (Zoom) |
+| Settings | theme: light · language: English · notifications: on · timezone: America/New_York |
