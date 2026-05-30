@@ -7,7 +7,6 @@ import time
 from collections import defaultdict
 import io
 import speech_recognition as sr
-
 import db
 import tools
 from agent import run_agent_loop
@@ -83,28 +82,6 @@ async def chat_endpoint(
             db_session.close()
             
     return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-# --- AUDIO ENDPOINT ---
-
-@app.post("/api/transcribe")
-async def transcribe_audio_endpoint(audio: UploadFile = File(...)):
-    """Transcribes an uploaded WAV file using Google's free API via SpeechRecognition."""
-    try:
-        content = await audio.read()
-        recognizer = sr.Recognizer()
-        
-        with sr.AudioFile(io.BytesIO(content)) as source:
-            audio_data = recognizer.record(source)
-            text = recognizer.recognize_google(audio_data)
-            return {"success": True, "text": text}
-    except sr.UnknownValueError:
-        return {"success": False, "message": "Could not understand audio."}
-    except sr.RequestError as e:
-        logger.error(f"Could not request results from Speech Recognition service; {e}")
-        return {"success": False, "message": "Transcription service unavailable."}
-    except Exception as e:
-        logger.error(f"Transcription error: {str(e)}", exc_info=True)
-        return {"success": False, "message": f"Error: {str(e)}"}
 
 # --- REST ENDPOINTS (for the live dashboard) ---
 

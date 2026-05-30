@@ -3,7 +3,8 @@ import { Bot, RefreshCw, AlertCircle, Database, HelpCircle } from 'lucide-react'
 import Chat from './components/Chat';
 import Dashboard from './components/Dashboard';
 
-const FASTAPI_URL = 'http://localhost:8000';
+// Fallback to localhost if env var is missing during dev
+const FASTAPI_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // Generate a random session ID on startup
 const getSessionId = () => {

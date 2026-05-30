@@ -1,0 +1,23 @@
+# Database
+app.db
+
+# Secrets
+.env
+frontend/.env
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDEs
+.vscode/
+.idea/
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Mac
+.DS_Store

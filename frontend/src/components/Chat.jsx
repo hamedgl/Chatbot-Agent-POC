@@ -14,7 +14,6 @@ export default function Chat({
 }) {
   const [input, setInput] = useState('');
   const chatEndRef = useRef(null);
-  
   // Voice state (Text-to-Speech)
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const prevStreamingRef = useRef(isStreaming);

@@ -5,7 +5,7 @@ A high-fidelity, clean, and interactive proof-of-concept demonstrating a natural
 ---
 
 ## 🌟 Highlights & Features
-1. **Clickable Confirmation Buttons**: Destructive actions (*removing a hobby, cancelling an event, or clearing profile fields*) are intercepted at the server layer, pausing execution. The React chat interface instantly renders styled **Confirm Action** and **Cancel Action** buttons so you don't have to type "Yes" or "No".
+1. **Clickable Confirmation Buttons**: ALL modifying actions (*adding/removing hobbies, creating/cancelling events, or updating settings/profile fields*) are intercepted at the server layer, pausing execution. The React chat interface instantly renders styled **Confirm Action** and **Cancel Action** buttons so you don't have to type "Yes" or "No".
 2. **Multi-Step/Chained Tool Calls**: The agent evaluates user intent and can chain multiple sequential database tool runs (e.g. adding a hobby and updating a preference card at the same time) before returning a final summary.
 3. **Real-Time Live Dashboard**: A custom two-column panel showing the conversational assistant on the left and a live database visual representation (Profile, Hobbies badges, Scheduled Events, Settings grid) on the right that **automatically updates in real time** as you chat.
 4. **Visual Tool Traces**: Streams collapsible terminal log outputs under the active assistant bubble, allowing users to watch the specific arguments and execution results of each tool in real time.
@@ -84,17 +84,17 @@ Here are the step-by-step example queries to showcase the main capabilities:
 * **Phrase**: `Show me my current profile details and list my hobbies.`
 * **Expectation**: The chatbot calls `get_profile` and `list_hobbies`, displaying the collapsible tool traces in the chat, and lists your details.
 
-### 2. Multi-Step Chained Action
+### 2. Multi-Step Chained Action (Requires Confirmation)
 * **Phrase**: `Add Gardening as a beginner hobby and change my theme setting to dark.`
-* **Expectation**: In one turn, the agent chains two tool calls (`add_hobby` and `update_setting`). Look at the dashboard on the right: a new hobby card appears and the theme changes to dark!
+* **Expectation**: In one turn, the agent chains two tool calls (`add_hobby` and `update_setting`). The system intercepts both actions and prompts you to confirm. Once confirmed, the dashboard updates immediately!
 
-### 3. Destructive Action - Clickable Confirmation Buttons (Hobby Removal)
+### 3. Modifying Action - Clickable Confirmation Buttons (Hobby Removal)
 * **Phrase**: `Remove swimming from my hobbies.`
 * **Expectation**: The system intercepts the request. The chat UI renders a panel with custom **Confirm Action** and **Cancel Action** buttons.
 * **Confirm Click**: Click `Confirm Action`. Swimming is deleted, the dashboard updates immediately, and the assistant summarizes the deletion.
 * **Cancel Click**: Alternatively, click `Cancel Action`. The tool is discarded and the hobby is kept in the database.
 
-### 4. Destructive Action - Clickable Confirmation (Event Cancellation)
+### 4. Modifying Action - Clickable Confirmation (Event Cancellation)
 * **Phrase**: `Cancel the scheduled event with ID 2.`
 * **Expectation**: The system blocks direct deletion and presents the custom confirmation panel. Click to proceed or abort.
 

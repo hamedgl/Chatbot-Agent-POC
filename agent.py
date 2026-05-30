@@ -184,7 +184,7 @@ TOOL_SCHEMAS = [
     }
 ]
 
-SYSTEM_PROMPT = """You are a helpful, professional chatbot that reads and modifies user data on their behalf.
+SYSTEM_PROMPT = """You are a helpful and professional chatbot that manages the user's data!
 You have access to a database of tool functions to interact with the user's data.
 
 Core Capabilities:
@@ -194,13 +194,12 @@ Core Capabilities:
 - Settings: get current preferences, update settings (theme, language, notifications, timezone).
 
 CRITICAL RULES:
-1. Always confirm back to the user what changed after performing any write action.
-2. For destructive actions (removing a hobby, cancelling an event, or clearing/wiping any profile field to empty/null), the orchestration layer will intercept and require explicit confirmation. Explain to the user why you are asking for confirmation.
-3. Be friendly and conversational, but highly structured.
-4. If a user request is ambiguous, ask clarifying questions before calling a tool.
-5. If a tool call fails or returns an error, explain the error to the user in a helpful way.
-6. Proactively interpret user sentiment and implicit statements as request updates. For example, if the user says "I hate reading" or "I don't do swimming anymore", proactively call the `remove_hobby` tool for that hobby name.
-7. ALWAYS use structured Markdown formatting for your responses. When listing data (like events or hobbies), use bullet points, bold text, and headers (###) to make the response highly readable and structured rather than a general text blob.
+1. Use a few relevant emojis to be friendly, but don't overdo it. Keep your answers concise and fast.
+2. ALWAYS confirm back to the user what changed after performing any write action.
+3. For ALL actions that change data, the system will intercept the action and require explicit user confirmation.
+4. Be friendly and conversational, but highly structured.
+5. If a user request is ambiguous, ask clarifying questions before calling a tool.
+6. Proactively interpret user sentiment and implicit statements as request updates. For example, if the user says "I hate reading", proactively call the `remove_hobby` tool for reading!
 """
 
 class SessionState:
@@ -243,35 +242,70 @@ def normalize_tool_name(name: str) -> str:
 
 def is_destructive_action(name: str, arguments: dict) -> Tuple[bool, str]:
     """
-    Check if a tool call is destructive and requires a confirmation flow.
-    Returns (is_destructive, reason_description).
+    Check if a tool call modifies data and requires a confirmation flow.
+    Returns (is_modifying, reason_description).
     """
     if name == "remove_hobby":
         return True, f"remove your hobby of **{arguments.get('name')}**"
     
+    if name == "add_hobby":
+        return True, f"add the hobby **{arguments.get('name')}** ({arguments.get('skill_level')})"
+    
     if name == "cancel_event":
         return True, f"cancel the scheduled event with ID **{arguments.get('event_id')}**"
+        
+    if name == "create_event":
+        return True, f"schedule a new event: **{arguments.get('title')}** on {arguments.get('date')} at {arguments.get('location')}"
     
     if name == "update_profile":
         field = arguments.get("field", "").lower().strip()
         val = str(arguments.get("value", "")).strip()
         if val in ["", "None", "null"]:
             return True, f"clear/wipe your profile field: **{field}**"
+        return True, f"update your profile **{field}** to **{val}**"
+        
+    if name == "update_setting":
+        return True, f"change your **{arguments.get('key')}** setting to **{arguments.get('value')}**"
             
     return False, ""
 
 def parse_fallback_tool_calls(text: str) -> List[Dict[str, Any]]:
     """
-    Defensive parser: scan text content for a JSON block (array or object) representing tool calls.
-    Used as a fallback when Gemma outputs tool calls directly in text rather than the tool_calls API field.
+    Defensive parser: scan text content for a JSON block or raw Gemma tokens representing tool calls.
+    Used as a fallback when the model outputs tool calls directly in text rather than the tool_calls API field.
     """
     if not text:
         return []
 
-    # Search for markdown code blocks containing JSON
+    # 1. Catch Gemma 4 raw token leaks (e.g. <|tool_call>call:add_hobby{name:<|"|>Reading<|"|>}<tool_call|>)
+    gemma_matches = re.findall(r"<\|tool_call\|?>call:([a-zA-Z0-9_]+)(\{.*?\})(?:<tool_call\|?>|</tool_call>|<\|/tool_call\|>|$)", text, re.DOTALL)
+    for func_name, args_str in gemma_matches:
+        # Replace Gemma's weird quote tokens with standard quotes
+        clean_args = args_str.replace('<|"|>', '"').replace('<|' + '"' + '|>', '"')
+        
+        # Gemma sometimes forgets to quote JSON keys. We use a regex to wrap unquoted keys in double quotes.
+        # This looks for an alphanumeric string followed by a colon, ensuring it's not already preceded by a quote.
+        clean_args = re.sub(r'(?<!")([a-zA-Z0-9_]+)\s*:', r'"\1":', clean_args)
+        
+        try:
+            parsed_args = json.loads(clean_args)
+            logger.info(f"Fallback Parser: Successfully intercepted raw Gemma tool tokens for '{func_name}'")
+            return [{
+                "id": f"fallback_{int(datetime.now().timestamp())}",
+                "type": "function",
+                "function": {
+                    "name": func_name,
+                    "arguments": json.dumps(parsed_args)
+                }
+            }]
+        except json.JSONDecodeError as e:
+            logger.warning(f"Fallback Parser: Failed to decode Gemma args '{clean_args}': {e}")
+            continue
+
+    # 2. Search for markdown code blocks containing JSON
     json_blocks = re.findall(r"```json\s*(.*?)\s*```", text, re.DOTALL)
     if not json_blocks:
-        # Search for raw brackets or braces if no markdown blocks are found
+        # 3. Search for raw brackets or braces if no markdown blocks are found
         json_blocks = re.findall(r"(\[.*?\]|\{.*?\})", text, re.DOTALL)
 
     for block in json_blocks:
@@ -579,7 +613,7 @@ def run_agent_loop(
                 }
                 
                 # Ask user for confirmation
-                confirm_prompt = f"⚠️ **Confirmation Required**: You requested to **{reason}**.\nThis is a destructive action. Do you want to proceed? (Yes/No)"
+                confirm_prompt = f"Almost done! I just need your permission to {reason}. Does this look good to you?"
                 
                 # We need to remove the assistant's request from history for now,
                 # since we didn't execute it, so that the next user reply matches the confirmation
