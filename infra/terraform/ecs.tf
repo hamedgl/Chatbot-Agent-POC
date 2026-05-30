@@ -40,6 +40,7 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "AWS_REGION",       value = var.aws_region },
       { name = "ALLOWED_ORIGINS",  value = "https://${aws_cloudfront_distribution.main.domain_name}" },
       { name = "SESSION_TTL_HOURS", value = "24" },
+      { name = "MAX_HISTORY_MESSAGES", value = var.max_history_messages },
     ]
 
     # DATABASE_URL is injected from Secrets Manager — password never appears

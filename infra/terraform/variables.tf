@@ -29,13 +29,19 @@ variable "bedrock_model_id" {
   # No image/video — text-only, which is all this app needs.
   # Nova Lite costs ~$0.06/1M and adds multimodal we don't use.
   # If Amazon has released a newer/cheaper model, update this value.
-  default     = "us.amazon.nova-micro-v1:0"
+  default     = "amazon.nova-micro-v1:0"
 }
 
 variable "llm_temperature" {
   description = "LLM temperature"
   type        = string
   default     = "0.2"
+}
+
+variable "max_history_messages" {
+  description = "Max history messages to keep per session"
+  type        = string
+  default     = "90"
 }
 
 variable "backend_image_tag" {

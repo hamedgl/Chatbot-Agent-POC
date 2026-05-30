@@ -319,6 +319,119 @@ def strip_thinking(text: str) -> str:
     """Remove <thinking>...</thinking> reasoning blocks that some models emit."""
     return re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL).strip()
 
+def clean_messages_for_llm(messages: List[Dict]) -> List[Dict]:
+    """
+    Ensures the message history strictly conforms to Bedrock & LiteLLM validation rules:
+    1. Alternates roles strictly: user -> assistant -> user -> assistant.
+    2. Merges consecutive messages of the same role (user/user or assistant/assistant).
+    3. Handles 'tool' role messages correctly:
+       - A 'tool' message must immediately follow an 'assistant' message containing 'tool_calls'.
+       - If a 'tool' message is orphaned (no preceding 'assistant' with 'tool_calls'), it is discarded.
+       - If an 'assistant' message has 'tool_calls' but is NOT followed by 'tool' messages,
+         we strip the 'tool_calls' to make it a plain text assistant message.
+    4. Ensures the first message after 'system' is a 'user' message by discarding any leading non-user messages.
+    """
+    if not messages:
+        return []
+
+    # Identify system prompt if present
+    has_system = False
+    system_msg = None
+    start_idx = 0
+    if messages[0].get("role") == "system":
+        system_msg = messages[0]
+        has_system = True
+        start_idx = 1
+
+    # Find the first 'user' message to start the sequence
+    first_user_idx = start_idx
+    while first_user_idx < len(messages) and messages[first_user_idx].get("role") != "user":
+        first_user_idx += 1
+
+    # If no 'user' message is found, return only system prompt (or empty if no system prompt)
+    if first_user_idx >= len(messages):
+        return [system_msg] if has_system else []
+
+    # First pass: Filter/adjust messages starting from the first user message.
+    # Ensure every 'tool' message has a matching preceding 'assistant' tool_call.
+    temp_msgs = []
+    for i in range(first_user_idx, len(messages)):
+        msg = messages[i]
+        role = msg.get("role")
+        
+        if role == "tool":
+            if temp_msgs and temp_msgs[-1].get("role") == "assistant" and temp_msgs[-1].get("tool_calls"):
+                tc_ids = [tc.get("id") for tc in temp_msgs[-1].get("tool_calls", [])]
+                if msg.get("tool_call_id") in tc_ids:
+                    temp_msgs.append(msg)
+                else:
+                    logger.warning(f"Discarding orphaned tool message with unmatched ID: {msg.get('tool_call_id')}")
+            else:
+                logger.warning(f"Discarding orphaned tool message: {msg}")
+        elif role == "assistant" and msg.get("tool_calls"):
+            # Check if there is a matching tool result following this message
+            has_matching_tool = False
+            tc_ids = [tc.get("id") for tc in msg.get("tool_calls", [])]
+            for j in range(i + 1, len(messages)):
+                if messages[j].get("role") == "tool" and messages[j].get("tool_call_id") in tc_ids:
+                    has_matching_tool = True
+                    break
+                elif messages[j].get("role") != "tool":
+                    break
+            
+            if has_matching_tool:
+                temp_msgs.append(msg)
+            else:
+                logger.warning(f"Stripping tool_calls from assistant message because no matching tool results follow: {msg}")
+                plain_msg = {"role": "assistant", "content": msg.get("content") or "Processing..."}
+                temp_msgs.append(plain_msg)
+        else:
+            temp_msgs.append(msg)
+
+    # Second pass: Merge consecutive messages of the same role
+    merged: List[Dict] = []
+    for msg in temp_msgs:
+        role = msg.get("role")
+        
+        if not merged:
+            merged.append(dict(msg))
+            continue
+            
+        prev = merged[-1]
+        prev_role = prev.get("role")
+        
+        if role == "tool":
+            merged.append(dict(msg))
+        elif role == prev_role:
+            if role == "user":
+                prev_content = prev.get("content") or ""
+                curr_content = msg.get("content") or ""
+                if prev_content and curr_content:
+                    prev["content"] = prev_content + "\n" + curr_content
+                else:
+                    prev["content"] = prev_content or curr_content
+            elif role == "assistant":
+                if not prev.get("tool_calls") and not msg.get("tool_calls"):
+                    prev_content = prev.get("content") or ""
+                    curr_content = msg.get("content") or ""
+                    if prev_content and curr_content:
+                        prev["content"] = prev_content + "\n" + curr_content
+                    else:
+                        prev["content"] = prev_content or curr_content
+                else:
+                    merged.append(dict(msg))
+        else:
+            merged.append(dict(msg))
+
+    # Reconstruct final list with system prompt
+    final_msgs = []
+    if has_system:
+        final_msgs.append(system_msg)
+    final_msgs.extend(merged)
+    
+    return final_msgs
+
+
 def trim_history(messages: List[Dict]) -> List[Dict]:
     """Keep system prompt + last MAX_HISTORY_MESSAGES messages to stay within context limits."""
     if len(messages) <= MAX_HISTORY_MESSAGES + 1:
@@ -495,10 +608,18 @@ def run_agent_loop(
     # 1. HANDLE CONFIRMATION FLOWS (pending_actions queue)
     if session.pending_actions and user_input:
         user_reply = user_input.lower().strip()
-        affirmative_words = ["yes", "y", "confirm", "ok", "sure", "do it", "go ahead", "please do", "yep", "yeah"]
-        negative_words = ["no", "n", "cancel", "stop", "dont", "don't", "abort", "nope"]
-        is_confirmed = any(word in user_reply for word in affirmative_words)
-        is_rejected = any(word in user_reply for word in negative_words)
+        # Use regex to split into word tokens, preventing false positive matches on substrings (e.g., 'y' matching inside 'my')
+        reply_tokens = set(re.findall(r"\b[a-z']+\b", user_reply))
+        
+        affirmative_tokens = {"yes", "y", "confirm", "ok", "sure", "yep", "yeah"}
+        affirmative_phrases = ["do it", "go ahead", "please do"]
+        negative_tokens = {"no", "n", "cancel", "stop", "dont", "don't", "abort", "nope"}
+        
+        is_confirmed = (
+            any(t in reply_tokens for t in affirmative_tokens) or
+            any(p in user_reply for p in affirmative_phrases)
+        )
+        is_rejected = any(t in reply_tokens for t in negative_tokens)
 
         if is_confirmed:
             pending_list = session.pending_actions[:]
@@ -533,7 +654,8 @@ def run_agent_loop(
                     "content": json.dumps(result)
                 })
 
-            session.messages.append({"role": "user", "content": user_input})
+            # Save the user's "yes" input in the DB for UI history, but do NOT append it to session.messages
+            # in RAM so the LLM gets the clean sequential Tool -> Assistant flow directly.
             save_message(db, session_id, "user", user_input)
             # Fall through to agent loop so LLM generates the final summary response
 
@@ -576,7 +698,8 @@ def run_agent_loop(
         iteration += 1
 
         try:
-            stream = make_llm_stream(trim_history(session.messages), TOOL_SCHEMAS)
+            cleaned_history = clean_messages_for_llm(trim_history(session.messages))
+            stream = make_llm_stream(cleaned_history, TOOL_SCHEMAS)
         except Exception as e:
             logger.error(f"Error calling LLM ({LLM_PROVIDER}): {str(e)}")
             if LLM_PROVIDER == "bedrock":
