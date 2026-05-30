@@ -526,6 +526,44 @@ def run_agent_loop(
             except json.JSONDecodeError:
                 arguments = {}
                 
+            # Validation check for missing required parameters
+            required_checklist = {
+                "add_hobby": ["name", "skill_level"],
+                "create_event": ["title", "date", "location"],
+                "update_profile": ["field", "value"],
+                "update_setting": ["key", "value"]
+            }
+            
+            if name in required_checklist:
+                missing = [p for p in required_checklist[name] if p not in arguments or str(arguments[p]).strip() == ""]
+                if missing:
+                    # Halt execution
+                    # Remove the assistant's incomplete tool-call message from history
+                    session.messages.pop()
+                    
+                    # Formulate a premium, highly contextual message
+                    if name == "add_hobby":
+                        if "name" in missing:
+                            msg = "I see you want to add a hobby, but I'm missing the hobby's name. Could you please tell me what hobby you'd like to add?"
+                        else:
+                            hobby_name = arguments.get("name", "this hobby")
+                            msg = f"I see you want to add **{hobby_name}** as a hobby, but I need to know your skill level. Are you a **beginner**, **intermediate**, or **advanced**?"
+                    elif name == "create_event":
+                        if "title" in missing:
+                            msg = "I see you want to schedule an event, but I'm missing the event's title. What is the title of the event?"
+                        else:
+                            title = arguments.get("title", "event")
+                            msg = f"I would love to schedule the event **{title}**, but I'm missing: **{', '.join(missing)}**. Please provide them."
+                    else:
+                        msg = f"I see you want to update your details, but I'm missing the required **{', '.join(missing)}** parameter(s). Please specify them."
+                        
+                    session.messages.append({"role": "assistant", "content": msg})
+                    
+                    yield json.dumps({"type": "trace", "message": f"⚠️ Halting: Missing required parameters for `{name}`: {missing}"}) + "\n"
+                    yield json.dumps({"type": "content", "delta": msg}) + "\n"
+                    yield json.dumps({"type": "done"}) + "\n"
+                    return
+                
             yield json.dumps({"type": "trace", "message": f"🔧 LLM requested tool: `{name}({arguments})`"}) + "\n"
             
             # Check destructive confirmation
