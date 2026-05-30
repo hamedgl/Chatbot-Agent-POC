@@ -6,7 +6,6 @@ import logging
 import time
 from collections import defaultdict
 import io
-import speech_recognition as sr
 import db
 import tools
 from agent import run_agent_loop
